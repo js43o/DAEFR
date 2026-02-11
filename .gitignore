@@ -2,3 +2,7 @@ __pycache__
 experiments/
 datasets/
 results/
+
+_*.py
+_*.txt
+!__init__.py
