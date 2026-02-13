@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 4.5e-6
-  max_epochs: 50
+  max_epochs: 20
   target: DAEFR.models.vqgan_origin.DAEFRModel
   params:
     image_key: "gt"
@@ -9,16 +9,16 @@ model:
     ddconfig:
       target: DAEFR.modules.vqvae.vqvae_arch.SharedEncDualDecVQModel
       params:
-        checkpoint: experiments/dualdecoder.ckpt # pretrained weights of DAEFR
-        embed_dim: 256
+        checkpoint: experiments/ddvqgan.ckpt # pretrained weights of DAEFR
+        embed_dim: 512 # same as VRE of OSDFace
         n_embed: 1024
         double_z: False
-        z_channels: 256
+        z_channels: 512 # same as VRE of OSDFace
         resolution: 512
         in_channels: 3
         out_ch: 3
         ch: 64
-        ch_mult: [1, 2, 2, 4, 4, 8] # num_down = len(ch_mult)-1
+        ch_mult: [1, 2, 2, 2, 4, 8] # same as VRE of OSDFace
         num_res_blocks: 2
         attn_resolutions: [16]
         dropout: 0.0
@@ -39,7 +39,7 @@ model:
 data:
   target: main_for_codebook.DataModuleFromConfig
   params:
-    batch_size: 2
+    batch_size: 3
     num_workers: 8
     train:
       target: dataset_multipie.MultiPIEDataset
