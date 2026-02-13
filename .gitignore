@@ -6,3 +6,4 @@ results/
 _*.py
 _*.txt
 !__init__.py
+.vscode/

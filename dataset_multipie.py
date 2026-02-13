@@ -103,9 +103,9 @@ class MultiPIEDataset(Dataset):
             kernel = degradations.random_mixed_kernels(
                 ["iso", "aniso"],
                 [0.5, 0.5],
-                cur_kernel_size,
-                [0.1, 2.0],
-                [0.1, 2.0],
+                cur_kernel_size,    # 41 for DiffBIR
+                [0.1, 2.0], # [0.1, 12] for DiffBIR
+                [0.1, 2.0], # [0.1, 12] for DiffBIR
                 [-math.pi, math.pi],
                 noise_range=None,
             )
@@ -113,7 +113,7 @@ class MultiPIEDataset(Dataset):
             lq_ft = cv2.filter2D(lq_ft, -1, kernel)
 
             # downsample
-            scale = np.random.uniform(0.8, 8.0)
+            scale = np.random.uniform(0.8, 8.0) # [1, 12] for DiffBIR
             lq_nf = cv2.resize(
                 lq_nf,
                 (int(self.res // scale), int(self.res // scale)),
@@ -126,13 +126,13 @@ class MultiPIEDataset(Dataset):
             )
 
             # noise
-            sigma = np.random.uniform(0, 10)
+            sigma = np.random.uniform(0, 10) # [0, 15] for DiffBIR
             noise = np.float32(np.random.randn(*(lq_nf.shape))) * sigma / 255.
             lq_nf = np.clip(lq_nf + noise, 0, 1)
             lq_ft = np.clip(lq_ft + noise, 0, 1)
             
             # jpeg compression
-            quality = np.random.uniform(80, 100)
+            quality = np.random.uniform(80, 100) # [30, 100] for DiffBIR
             lq_nf = degradations.add_jpg_compression(lq_nf, quality)
             lq_ft = degradations.add_jpg_compression(lq_ft, quality)
 

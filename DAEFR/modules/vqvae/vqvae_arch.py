@@ -291,21 +291,22 @@ class MultiHeadAttnBlock(nn.Module):
         # compute attention
         b,c,h,w = q.shape
         q = q.reshape(b, self.head_size, self.att_size ,h*w) 
-        q = q.permute(0, 3, 1, 2) # b, hw, head, att
+        q = q.permute(0, 3, 1, 2).contiguous() # b, hw, head, att
 
         k = k.reshape(b, self.head_size, self.att_size ,h*w) 
-        k = k.permute(0, 3, 1, 2)
+        k = k.permute(0, 3, 1, 2).contiguous()
 
         v = v.reshape(b, self.head_size, self.att_size ,h*w) 
-        v = v.permute(0, 3, 1, 2)
+        v = v.permute(0, 3, 1, 2).contiguous()
 
 
-        q = q.transpose(1, 2)
-        v = v.transpose(1, 2)
-        k = k.transpose(1, 2).transpose(2,3)
+        q = q.transpose(1, 2).contiguous()
+        v = v.transpose(1, 2).contiguous()
+        k = k.transpose(1, 2).contiguous().transpose(2, 3).contiguous()
 
         scale = int(self.att_size)**(-0.5)
         q.mul_(scale)
+        
         w_ = torch.matmul(q, k)
         w_ = F.softmax(w_, dim=3)
 
@@ -313,7 +314,7 @@ class MultiHeadAttnBlock(nn.Module):
 
         w_ = w_.transpose(1, 2).contiguous() # [b, h*w, head, att]
         w_ = w_.view(b, h, w, -1)
-        w_ = w_.permute(0, 3, 1, 2)
+        w_ = w_.permute(0, 3, 1, 2).contiguous()
 
         w_ = self.proj_out(w_)
 
@@ -816,3 +817,89 @@ class VQVAEGANMERGE(nn.Module):
         # return dec, diff, info, hs
         # info = (perplexity, min_encodings, min_encoding_indices, d)
         return dec, diff, info, hs, h, quant, dictionary                        
+    
+    
+"""
+VQ 기반 공유 인코더 + 듀얼 디코더 아키텍처
+"""
+class SharedEncDualDecVQModel(nn.Module):
+    def __init__(self, ddconfig, args=None):
+        super().__init__()
+        
+        self.checkpoint = ddconfig['checkpoint']
+        
+        # 1. Common Configs
+        self.n_embed = ddconfig['n_embed'] 
+        self.embed_dim = ddconfig['embed_dim']
+        self.z_channels = ddconfig['z_channels']
+        
+        self.ch = ddconfig['ch']
+        self.out_ch = ddconfig['out_ch']
+        
+        # 2. Single Shared Encoder (Input: LQ Non-Frontal)
+        self.encoder = MultiHeadEncoder(**ddconfig)
+        
+        # 3. Pre-Quantization Convolution
+        self.quant_conv = nn.Conv2d(ddconfig['z_channels'], ddconfig['embed_dim'], 1)
+        
+        # 4. Shared Vector Quantizer
+        # 두 디코더가 같은 '얼굴 부품' 사전(Codebook)을 사용하도록 강제합니다.
+        self.quantize = VectorQuantizer(
+            self.n_embed, self.embed_dim, beta=0.25
+        )
+        
+        # 5. Post-Quantization Convolution (Shared)
+        # Latent가 디코더로 들어가기 전 차원 복구. 
+        # 이를 공유함으로써 Latent Code 자체가 두 태스크에 모두 호환되도록 만듭니다.
+        self.post_quant_conv = nn.Conv2d(ddconfig['embed_dim'], ddconfig['z_channels'], 1)
+        
+        # 6. Dual Decoders
+        # Decoder 1: Restoration (Target: HQ Non-Frontal)
+        self.decoder_r = MultiHeadDecoder(**ddconfig)
+        
+        # Decoder 2: Frontalization (Target: LQ Frontal)
+        self.decoder_f = MultiHeadDecoder(**ddconfig)
+        
+        # fix_decoder, fix_codebook, fix_encoder는 필요 시 추가 구현
+        if self.checkpoint is not None:
+            ckpt = torch.load(self.checkpoint)['state_dict']
+            missing, unexpected = self.load_state_dict(ckpt)
+            print("🕒 checkpoint is loaded", len(missing), len(unexpected))
+
+    def encode(self, x):
+        hs = self.encoder(x)
+        h = self.quant_conv(hs['out'])
+        quant, emb_loss, info, dictionary = self.quantize(h)
+        
+        return quant, emb_loss, info, hs, h, dictionary
+
+    def decode_restoration(self, quant):
+        quant = self.post_quant_conv(quant)
+        dec = self.decoder_r(quant)
+        
+        return dec
+    
+    def decode_frontalization(self, quant):
+        quant = self.post_quant_conv(quant)
+        dec = self.decoder_f(quant)
+        
+        return dec
+
+    def forward(self, input_lq_nf):
+        # 1. Encode (LQ Non-Frontal)
+        quant, emb_loss, info, hs, h, dictionary = self.encode(input_lq_nf)
+        
+        # 2. Decode Stream 1: Restoration (Reconstructs HQ Non-Frontal)
+        dec_restore = self.decode_restoration(quant)
+        
+        # 3. Decode Stream 2: Frontalization (Reconstructs LQ Frontal)
+        dec_frontal = self.decode_frontalization(quant)
+        
+        return dec_restore, dec_frontal, emb_loss, info, hs, h, quant, dictionary
+    
+    def get_last_layer_restoration(self):
+        return self.decoder_r.conv_out.weight
+    
+    def get_last_layer_frontalization(self):
+        return self.decoder_f.conv_out.weight
+    

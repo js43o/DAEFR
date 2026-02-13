@@ -27,14 +27,14 @@ class ActNorm(nn.Module):
                 .unsqueeze(1)
                 .unsqueeze(2)
                 .unsqueeze(3)
-                .permute(1, 0, 2, 3)
+                .permute(1, 0, 2, 3).contiguous()
             )
             std = (
                 flatten.std(1)
                 .unsqueeze(1)
                 .unsqueeze(2)
                 .unsqueeze(3)
-                .permute(1, 0, 2, 3)
+                .permute(1, 0, 2, 3).contiguous()
             )
 
             self.loc.data.copy_(-mean)

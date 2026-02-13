@@ -5,7 +5,9 @@ from copy import deepcopy
 
 from DAEFR.modules.losses.lpips import LPIPS
 from DAEFR.modules.discriminator.model import NLayerDiscriminator, weights_init
-from DAEFR.modules.vqvae.facial_component_discriminator import FacialComponentDiscriminator
+from DAEFR.modules.vqvae.facial_component_discriminator import (
+    FacialComponentDiscriminator,
+)
 from basicsr.losses.losses import GANLoss, L1Loss
 from DAEFR.modules.vqvae.arcface_arch import ResNetArcFace
 
@@ -15,33 +17,49 @@ class DummyLoss(nn.Module):
         super().__init__()
 
 
-def adopt_weight(weight, global_step, threshold=0, value=0.):
+def adopt_weight(weight, global_step, threshold=0, value=0.0):
     if global_step < threshold:
         weight = value
     return weight
 
 
 def hinge_d_loss(logits_real, logits_fake):
-    loss_real = torch.mean(F.relu(1. - logits_real))
-    loss_fake = torch.mean(F.relu(1. + logits_fake))
+    loss_real = torch.mean(F.relu(1.0 - logits_real))
+    loss_fake = torch.mean(F.relu(1.0 + logits_fake))
     d_loss = 0.5 * (loss_real + loss_fake)
     return d_loss
 
 
 def vanilla_d_loss(logits_real, logits_fake):
     d_loss = 0.5 * (
-        torch.mean(torch.nn.functional.softplus(-logits_real)) +
-        torch.mean(torch.nn.functional.softplus(logits_fake)))
+        torch.mean(torch.nn.functional.softplus(-logits_real))
+        + torch.mean(torch.nn.functional.softplus(logits_fake))
+    )
     return d_loss
 
 
 class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
-    def __init__(self, disc_start, codebook_weight=1.0, pixelloss_weight=1.0,
-                 disc_num_layers=3, disc_in_channels=3, disc_factor=1.0, disc_weight=1.0,
-                 perceptual_weight=1.0, use_actnorm=False, 
-                 disc_ndf=64, disc_loss="hinge", comp_weight=0.0, comp_style_weight=0.0, 
-                 identity_weight=0.0, comp_disc_loss='vanilla', lpips_style_weight=0.0,
-                 identity_model_path=None, **ignore_kwargs):
+    def __init__(
+        self,
+        disc_start,
+        codebook_weight=1.0,
+        pixelloss_weight=1.0,
+        disc_num_layers=3,
+        disc_in_channels=3,
+        disc_factor=1.0,
+        disc_weight=1.0,
+        perceptual_weight=1.0,
+        use_actnorm=False,
+        disc_ndf=64,
+        disc_loss="hinge",
+        comp_weight=0.0,
+        comp_style_weight=0.0,
+        identity_weight=0.0,
+        comp_disc_loss="vanilla",
+        lpips_style_weight=0.0,
+        identity_model_path=None,
+        **ignore_kwargs,
+    ):
         super().__init__()
         assert disc_loss in ["hinge", "vanilla"]
         self.codebook_weight = codebook_weight
@@ -49,34 +67,37 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
         self.perceptual_loss = LPIPS(style_weight=lpips_style_weight).eval()
         self.perceptual_weight = perceptual_weight
 
-        self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
-                                                 n_layers=disc_num_layers,
-                                                 use_actnorm=use_actnorm,
-                                                 ndf=disc_ndf
-                                                 ).apply(weights_init)
+        self.discriminator = NLayerDiscriminator(
+            input_nc=disc_in_channels,
+            n_layers=disc_num_layers,
+            use_actnorm=use_actnorm,
+            ndf=disc_ndf,
+        ).apply(weights_init)
         if comp_weight > 0:
             self.net_d_left_eye = FacialComponentDiscriminator()
             self.net_d_right_eye = FacialComponentDiscriminator()
             self.net_d_mouth = FacialComponentDiscriminator()
-            print(f'Use components discrimination')
+            print(f"Use components discrimination")
 
-            self.cri_component = GANLoss(gan_type=comp_disc_loss, 
-                                         real_label_val=1.0, 
-                                         fake_label_val=0.0, 
-                                         loss_weight=comp_weight)
+            self.cri_component = GANLoss(
+                gan_type=comp_disc_loss,
+                real_label_val=1.0,
+                fake_label_val=0.0,
+                loss_weight=comp_weight,
+            )
 
-            if comp_style_weight > 0.:
-                self.cri_style = L1Loss(loss_weight=comp_style_weight, reduction='mean')
+            if comp_style_weight > 0.0:
+                self.cri_style = L1Loss(loss_weight=comp_style_weight, reduction="mean")
 
         if identity_weight > 0:
-            self.identity = ResNetArcFace(block = 'IRBlock', 
-                                          layers = [2, 2, 2, 2],
-                                          use_se = False)
-            print(f'Use identity loss')
+            self.identity = ResNetArcFace(
+                block="IRBlock", layers=[2, 2, 2, 2], use_se=False
+            )
+            print(f"Use identity loss")
             if identity_model_path is not None:
                 sd = torch.load(identity_model_path, map_location="cpu")
                 for k, v in deepcopy(sd).items():
-                    if k.startswith('module.'):
+                    if k.startswith("module."):
                         sd[k[7:]] = v
                         sd.pop(k)
                 self.identity.load_state_dict(sd, strict=True)
@@ -84,8 +105,7 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
             for param in self.identity.parameters():
                 param.requires_grad = False
 
-            self.cri_identity = L1Loss(loss_weight=identity_weight, reduction='mean')
-
+            self.cri_identity = L1Loss(loss_weight=identity_weight, reduction="mean")
 
         self.discriminator_iter_start = disc_start
         if disc_loss == "hinge":
@@ -94,7 +114,9 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
             self.disc_loss = vanilla_d_loss
         else:
             raise ValueError(f"Unknown GAN loss '{disc_loss}'.")
-        print(f"VQLPIPSWithDiscriminatorWithCompWithIdentity running with {disc_loss} loss.")
+        print(
+            f"VQLPIPSWithDiscriminatorWithCompWithIdentity running with {disc_loss} loss."
+        )
         self.disc_factor = disc_factor
         self.discriminator_weight = disc_weight
         self.comp_weight = comp_weight
@@ -107,8 +129,12 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
             nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
             g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
         else:
-            nll_grads = torch.autograd.grad(nll_loss, self.last_layer[0], retain_graph=True)[0]
-            g_grads = torch.autograd.grad(g_loss, self.last_layer[0], retain_graph=True)[0]
+            nll_grads = torch.autograd.grad(
+                nll_loss, self.last_layer[0], retain_graph=True
+            )[0]
+            g_grads = torch.autograd.grad(
+                g_loss, self.last_layer[0], retain_graph=True
+            )[0]
 
         d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
         d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
@@ -124,103 +150,157 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
         """
         n, c, h, w = x.size()
         features = x.view(n, c, w * h)
-        features_t = features.transpose(1, 2)
+        features_t = features.transpose(1, 2).contiguous()
         gram = features.bmm(features_t) / (c * h * w)
         return gram
 
     def gray_resize_for_identity(self, out, size=128):
-        out_gray = (0.2989 * out[:, 0, :, :] + 0.5870 * out[:, 1, :, :] + 0.1140 * out[:, 2, :, :])
+        out_gray = (
+            0.2989 * out[:, 0, :, :]
+            + 0.5870 * out[:, 1, :, :]
+            + 0.1140 * out[:, 2, :, :]
+        )
         out_gray = out_gray.unsqueeze(1)
-        out_gray = F.interpolate(out_gray, (size, size), mode='bilinear', align_corners=False)
+        out_gray = F.interpolate(
+            out_gray, (size, size), mode="bilinear", align_corners=False
+        )
         return out_gray
 
-    def forward(self, codebook_loss, gts, reconstructions, components, optimizer_idx,
-                global_step, last_layer=None, split="train"):
+    def forward(
+        self,
+        codebook_loss,
+        gts,
+        reconstructions,
+        components,
+        optimizer_idx,
+        global_step,
+        last_layer=None,
+        split="train",
+    ):
 
         # now the GAN part
         if optimizer_idx == 0:
-            rec_loss = (torch.abs(gts.contiguous() - reconstructions.contiguous())) * self.pixel_weight
+            rec_loss = (
+                torch.abs(gts.contiguous() - reconstructions.contiguous())
+            ) * self.pixel_weight
             if self.perceptual_weight > 0:
-                p_loss, p_style_loss = self.perceptual_loss(gts.contiguous(), reconstructions.contiguous())
+                p_loss, p_style_loss = self.perceptual_loss(
+                    gts.contiguous(), reconstructions.contiguous()
+                )
                 rec_loss = rec_loss + self.perceptual_weight * p_loss
             else:
                 p_loss = torch.tensor([0.0])
                 p_style_loss = torch.tensor([0.0])
 
             nll_loss = rec_loss
-            #nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
+            # nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
             nll_loss = torch.mean(nll_loss)
 
-        
             # generator update
-            
+
             logits_fake = self.discriminator(reconstructions.contiguous())
             g_loss = -torch.mean(logits_fake)
 
             try:
-                d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer=last_layer)
+                d_weight = self.calculate_adaptive_weight(
+                    nll_loss, g_loss, last_layer=last_layer
+                )
             except RuntimeError:
                 assert not self.training
                 d_weight = torch.tensor(0.0)
 
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            
-            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean() + p_style_loss
+            disc_factor = adopt_weight(
+                self.disc_factor, global_step, threshold=self.discriminator_iter_start
+            )
+
+            loss = (
+                nll_loss
+                + d_weight * disc_factor * g_loss
+                + self.codebook_weight * codebook_loss.mean()
+                + p_style_loss
+            )
 
             log = {
-                   "{}/quant_loss".format(split): codebook_loss.detach().mean(),
-                   "{}/nll_loss".format(split): nll_loss.detach().mean(),
-                   "{}/rec_loss".format(split): rec_loss.detach().mean(),
-                   "{}/p_loss".format(split): p_loss.detach().mean(),
-                   "{}/p_style_loss".format(split): p_style_loss.detach().mean(),
-                   "{}/d_weight".format(split): d_weight.detach(),
-                   "{}/disc_factor".format(split): torch.tensor(disc_factor),
-                   "{}/g_loss".format(split): g_loss.detach().mean(),
-                   }
+                "{}/quant_loss".format(split): codebook_loss.detach().mean(),
+                "{}/nll_loss".format(split): nll_loss.detach().mean(),
+                "{}/rec_loss".format(split): rec_loss.detach().mean(),
+                "{}/p_loss".format(split): p_loss.detach().mean(),
+                "{}/p_style_loss".format(split): p_style_loss.detach().mean(),
+                "{}/d_weight".format(split): d_weight.detach(),
+                "{}/disc_factor".format(split): torch.tensor(disc_factor),
+                "{}/g_loss".format(split): g_loss.detach().mean(),
+            }
 
-            if self.comp_weight > 0. and components is not None and self.discriminator_iter_start < global_step:
-                fake_left_eye, fake_left_eye_feats = self.net_d_left_eye(components['left_eyes'], return_feats=True)
+            if (
+                self.comp_weight > 0.0
+                and components is not None
+                and self.discriminator_iter_start < global_step
+            ):
+                fake_left_eye, fake_left_eye_feats = self.net_d_left_eye(
+                    components["left_eyes"], return_feats=True
+                )
                 comp_g_loss = self.cri_component(fake_left_eye, True, is_disc=False)
-                loss = loss + comp_g_loss 
+                loss = loss + comp_g_loss
                 log["{}/g_left_loss".format(split)] = comp_g_loss.detach()
 
-                fake_right_eye, fake_right_eye_feats = self.net_d_right_eye(components['right_eyes'], return_feats=True)
+                fake_right_eye, fake_right_eye_feats = self.net_d_right_eye(
+                    components["right_eyes"], return_feats=True
+                )
                 comp_g_loss = self.cri_component(fake_right_eye, True, is_disc=False)
-                loss = loss + comp_g_loss 
+                loss = loss + comp_g_loss
                 log["{}/g_right_loss".format(split)] = comp_g_loss.detach()
 
-                fake_mouth, fake_mouth_feats = self.net_d_mouth(components['mouths'], return_feats=True)
+                fake_mouth, fake_mouth_feats = self.net_d_mouth(
+                    components["mouths"], return_feats=True
+                )
                 comp_g_loss = self.cri_component(fake_mouth, True, is_disc=False)
-                loss = loss + comp_g_loss 
+                loss = loss + comp_g_loss
                 log["{}/g_mouth_loss".format(split)] = comp_g_loss.detach()
 
-                if self.comp_style_weight > 0.:
-                    _, real_left_eye_feats = self.net_d_left_eye(components['left_eyes_gt'], return_feats=True)
-                    _, real_right_eye_feats = self.net_d_right_eye(components['right_eyes_gt'], return_feats=True)
-                    _, real_mouth_feats = self.net_d_mouth(components['mouths_gt'], return_feats=True)
+                if self.comp_style_weight > 0.0:
+                    _, real_left_eye_feats = self.net_d_left_eye(
+                        components["left_eyes_gt"], return_feats=True
+                    )
+                    _, real_right_eye_feats = self.net_d_right_eye(
+                        components["right_eyes_gt"], return_feats=True
+                    )
+                    _, real_mouth_feats = self.net_d_mouth(
+                        components["mouths_gt"], return_feats=True
+                    )
 
                     def _comp_style(feat, feat_gt, criterion):
-                        return criterion(self._gram_mat(feat[0]), self._gram_mat(
-                            feat_gt[0].detach())) * 0.5 + criterion(self._gram_mat(
-                            feat[1]), self._gram_mat(feat_gt[1].detach()))
+                        return criterion(
+                            self._gram_mat(feat[0]), self._gram_mat(feat_gt[0].detach())
+                        ) * 0.5 + criterion(
+                            self._gram_mat(feat[1]), self._gram_mat(feat_gt[1].detach())
+                        )
 
-                    comp_style_loss = 0.
-                    comp_style_loss = comp_style_loss + _comp_style(fake_left_eye_feats, real_left_eye_feats, self.cri_style)
-                    comp_style_loss = comp_style_loss + _comp_style(fake_right_eye_feats, real_right_eye_feats, self.cri_style)
-                    comp_style_loss = comp_style_loss + _comp_style(fake_mouth_feats, real_mouth_feats, self.cri_style)
-                    loss = loss + comp_style_loss 
+                    comp_style_loss = 0.0
+                    comp_style_loss = comp_style_loss + _comp_style(
+                        fake_left_eye_feats, real_left_eye_feats, self.cri_style
+                    )
+                    comp_style_loss = comp_style_loss + _comp_style(
+                        fake_right_eye_feats, real_right_eye_feats, self.cri_style
+                    )
+                    comp_style_loss = comp_style_loss + _comp_style(
+                        fake_mouth_feats, real_mouth_feats, self.cri_style
+                    )
+                    loss = loss + comp_style_loss
                     log["{}/comp_style_loss".format(split)] = comp_style_loss.detach()
 
-            if self.identity_weight > 0. and self.discriminator_iter_start < global_step:
+            if (
+                self.identity_weight > 0.0
+                and self.discriminator_iter_start < global_step
+            ):
                 self.identity.eval()
                 out_gray = self.gray_resize_for_identity(reconstructions)
                 gt_gray = self.gray_resize_for_identity(gts)
-                
+
                 identity_gt = self.identity(gt_gray).detach()
                 identity_out = self.identity(out_gray)
 
                 identity_loss = self.cri_identity(identity_out, identity_gt)
-                loss = loss + identity_loss 
+                loss = loss + identity_loss
                 log["{}/identity_loss".format(split)] = identity_loss.detach()
 
             log["{}/total_loss".format(split)] = loss.clone().detach().mean()
@@ -229,26 +309,33 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
 
         if optimizer_idx == 1:
             # second pass for discriminator update
-            
+
             logits_real = self.discriminator(gts.contiguous().detach())
             logits_fake = self.discriminator(reconstructions.contiguous().detach())
 
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
+            disc_factor = adopt_weight(
+                self.disc_factor, global_step, threshold=self.discriminator_iter_start
+            )
             d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
 
-            log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
-                   "{}/logits_real".format(split): logits_real.detach().mean(),
-                   "{}/logits_fake".format(split): logits_fake.detach().mean()
-                   }
+            log = {
+                "{}/disc_loss".format(split): d_loss.clone().detach().mean(),
+                "{}/logits_real".format(split): logits_real.detach().mean(),
+                "{}/logits_fake".format(split): logits_fake.detach().mean(),
+            }
             return d_loss, log
 
         # left eye
         if optimizer_idx == 2:
             # third pass for discriminator update
-            disc_factor = adopt_weight(1.0, global_step, threshold=self.discriminator_iter_start)
-            fake_d_pred, _ = self.net_d_left_eye(components['left_eyes'].detach())
-            real_d_pred, _ = self.net_d_left_eye(components['left_eyes_gt'])
-            d_loss = self.cri_component(real_d_pred, True, is_disc=True) + self.cri_component(fake_d_pred, False, is_disc=True)
+            disc_factor = adopt_weight(
+                1.0, global_step, threshold=self.discriminator_iter_start
+            )
+            fake_d_pred, _ = self.net_d_left_eye(components["left_eyes"].detach())
+            real_d_pred, _ = self.net_d_left_eye(components["left_eyes_gt"])
+            d_loss = self.cri_component(
+                real_d_pred, True, is_disc=True
+            ) + self.cri_component(fake_d_pred, False, is_disc=True)
 
             log = {"{}/d_left_loss".format(split): d_loss.clone().detach().mean()}
             return d_loss, log
@@ -256,9 +343,11 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
         # right eye
         if optimizer_idx == 3:
             # forth pass for discriminator update
-            fake_d_pred, _ = self.net_d_right_eye(components['right_eyes'].detach())
-            real_d_pred, _ = self.net_d_right_eye(components['right_eyes_gt'])
-            d_loss = self.cri_component(real_d_pred, True, is_disc=True) + self.cri_component(fake_d_pred, False, is_disc=True)
+            fake_d_pred, _ = self.net_d_right_eye(components["right_eyes"].detach())
+            real_d_pred, _ = self.net_d_right_eye(components["right_eyes_gt"])
+            d_loss = self.cri_component(
+                real_d_pred, True, is_disc=True
+            ) + self.cri_component(fake_d_pred, False, is_disc=True)
 
             log = {"{}/d_right_loss".format(split): d_loss.clone().detach().mean()}
             return d_loss, log
@@ -266,9 +355,98 @@ class VQLPIPSWithDiscriminatorWithCompWithIdentity(nn.Module):
         # mouth
         if optimizer_idx == 4:
             # fifth pass for discriminator update
-            fake_d_pred, _ = self.net_d_mouth(components['mouths'].detach())
-            real_d_pred, _ = self.net_d_mouth(components['mouths_gt'])
-            d_loss = self.cri_component(real_d_pred, True, is_disc=True) + self.cri_component(fake_d_pred, False, is_disc=True)
+            fake_d_pred, _ = self.net_d_mouth(components["mouths"].detach())
+            real_d_pred, _ = self.net_d_mouth(components["mouths_gt"])
+            d_loss = self.cri_component(
+                real_d_pred, True, is_disc=True
+            ) + self.cri_component(fake_d_pred, False, is_disc=True)
 
             log = {"{}/d_mouth_loss".format(split): d_loss.clone().detach().mean()}
             return d_loss, log
+
+
+"""
+VQ 기반 공유 인코더 + 듀얼 디코더 아키텍처 전용 손실 함수
+"""
+
+
+class DualTaskVQLoss(nn.Module):
+    def __init__(self, loss_config, disc_start, codebook_weight=1.0):
+        super().__init__()
+        self.codebook_weight = codebook_weight
+
+        # --- Branch 1 Loss: Restoration (Target: HQ Non-Frontal) ---
+        # 고화질 복원이 목표이므로 LPIPS와 Discriminator가 중요합니다.
+        self.loss_restoration = VQLPIPSWithDiscriminatorWithCompWithIdentity(
+            # config에서 필요한 파라미터 전달 (예: disc_weight 등)
+            **loss_config
+        )
+
+        # --- Branch 2 Loss: Frontalization (Target: LQ Frontal) ---
+        # 정면화가 목표. 여기서도 GAN Loss가 포즈 변경의 리얼리티를 잡아줍니다.
+        # LQ 타겟이라도 구조적 일치를 위해 LPIPS는 유효합니다.
+        self.loss_frontalization = VQLPIPSWithDiscriminatorWithCompWithIdentity(
+            **loss_config
+        )
+
+    def forward(
+        self,
+        codebook_loss,
+        inputs_lq_nf,  # Input (for reference if needed)
+        recons_restore,  # Output 1
+        target_hq_nf,  # GT 1
+        recons_frontal,  # Output 2
+        target_lq_f,  # GT 2
+        optimizer_idx,
+        global_step,
+        last_layer_restore,
+        last_layer_frontal,
+        split="train",
+    ):
+
+        # -------------------------------------------
+        # 1. Restoration Loss (Decoder 1 vs HQ Non-Frontal)
+        # -------------------------------------------
+        loss_restore, log_restore = self.loss_restoration(
+            codebook_loss,  # Note: We pass codebook loss here
+            gts=target_hq_nf,
+            reconstructions=recons_restore,
+            components=None,
+            optimizer_idx=optimizer_idx,
+            global_step=global_step,
+            last_layer=last_layer_restore,
+            split=split,
+        )
+
+        # -------------------------------------------
+        # 2. Frontalization Loss (Decoder 2 vs LQ Frontal)
+        # -------------------------------------------
+        # Codebook loss는 이미 위에서 계산에 포함되었거나 공유되므로,
+        # 여기서는 0으로 처리하거나 loss weight 조절이 필요합니다.
+        # 보통 중복 적용을 피하기 위해 두 번째 호출에는 0.0을 넘깁니다.
+        loss_frontal, log_frontal = self.loss_frontalization(
+            torch.tensor(0.0).to(codebook_loss.device),
+            gts=target_lq_f,
+            reconstructions=recons_frontal,
+            components=None,
+            optimizer_idx=optimizer_idx,
+            global_step=global_step,
+            last_layer=last_layer_frontal,
+            split=split,
+        )
+
+        # Key 수정: Dictionary Key 충돌 방지
+        log_frontal = {k + "_frontal": v for k, v in log_frontal.items()}
+        log_restore = {k + "_restore": v for k, v in log_restore.items()}
+
+        # -------------------------------------------
+        # 3. Combine Losses
+        # -------------------------------------------
+        # 두 태스크의 중요도에 따라 가중치(alpha, beta)를 조절할 수 있습니다.
+        # 여기서는 1:1로 합칩니다.
+        total_loss = loss_restore + loss_frontal
+
+        total_log = {**log_restore, **log_frontal}
+        total_log[f"{split}/total_loss"] = total_loss.detach()
+
+        return total_loss, total_log
